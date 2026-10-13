@@ -256,6 +256,7 @@ const state = {
   clue: null,
   lock: false,
   timer: null,
+  clock: 20,
   study: null,
   lastCats: []
 };
@@ -283,6 +284,52 @@ function allowed(q) { return state.level === 'climb' || q.d === state.level; }
 function remaining() { return BANK.filter(q => allowed(q) && !state.used.has(q.id)).length; }
 function poolSize() { return BANK.filter(allowed).length; }
 function clearTimer() { if (state.timer) { clearInterval(state.timer); state.timer = null; } }
+function startClueTimer() {
+  clearTimer();
+  state.clock = 20;
+  state.timer = setInterval(() => {
+    state.clock -= 0.1;
+    const bar = document.querySelector('.timer > i');
+    const label = document.querySelector('[data-clock]');
+    if (bar) {
+      bar.style.transform = `scaleX(${Math.max(0, state.clock / 20)})`;
+      bar.parentElement.classList.toggle('warn', state.clock <= 5);
+    }
+    if (label) label.textContent = `${Math.max(0, Math.ceil(state.clock))}s`;
+    if (state.clock <= 0) clueTimeout();
+  }, 100);
+}
+function clueTimeout() {
+  clearTimer();
+  if (state.view === 'clue' && state.clue) boardTimeout();
+  else if (state.view === 'buzzer' && state.buzzer && !state.buzzer.note) buzzTimeout();
+}
+function boardTimeout() {
+  if (state.view !== 'clue' || !state.clue) return;
+  const c = state.clue;
+  c.picked = null;
+  c.correct = false;
+  const pts = c.wager || c.value;
+  if (c.dd) currentTeam().score -= pts;
+  miss();
+  c.offerSteal = state.teams.length > 1 && !c.dd && !c.stolen;
+  state.view = 'resolve';
+  render();
+}
+function buzzTimeout() {
+  const B = state.buzzer;
+  if (!B || B.note) return;
+  if (B.buzzed != null) B.locked.add(B.buzzed);
+  B.buzzed = null;
+  B.lock = true;
+  B.note = `Time. Answer: ${B.q.a}. ${B.q.ref}`;
+  miss();
+  render();
+}
+function clockBar() {
+  const left = state.clock == null ? 20 : state.clock;
+  return `<div class="timer${left<=5?' warn':''}"><i style="transform:scaleX(${Math.max(0, left/20)})"></i></div><p class="overlay-note" data-clock>${Math.max(0, Math.ceil(left))}s</p>`;
+}
 function toast(msg) {
   const el = document.createElement('div');
   el.className = 'toast';
@@ -420,6 +467,7 @@ function homeHTML() {
         <div><b>How a night runs</b> Put a laptop or tablet where everyone can see it. Pick a band, pick a mode, name the teams.</div>
         <div><b>Full climb</b> Easy clues at 100–200, medium at 300, hard at 400, extreme at 500. A single band keeps every clue in that lane.</div>
         <div><b>No repeats</b> Answered questions are parked for the session. Study uses the same bench. Refresh the library to put them back.</div>
+        <div><b>20 seconds</b> The Board and Buzzer Battle give 20 seconds once the clue is up. Time runs out, it counts as a miss.</div>
         <div><b>Keys</b> Answers are 1–4. In Buzzer Battle, six teams slam 1 Z V M / =.</div>
         <div><b>Privacy</b> No account, no tracking, no ads. Questions stay on this device. <button class="ghost" data-act="privacy" style="margin-top:8px">Privacy policy</button></div>
         <div><b>Keep it free</b> No ads, no charge. A gift helps cover the store fees. <button class="ghost" data-act="donate" style="margin-top:8px">Donation page</button></div>
@@ -491,7 +539,8 @@ function clueHTML() {
     ? `<p class="ref">${c.offerSteal ? 'Miss. Steal before the answer is shown.' : ((c.correct ? 'Correct. ' : 'Answer: ' + esc(q.a) + '. ') + esc(q.ref))}</p><div class="row-actions">${c.offerSteal ? '<button class="primary" data-act="open-steal">Open a steal</button>' : ''}<button class="primary" data-act="continue">${c.offerSteal ? 'No steal' : 'Continue'}</button></div>`
     : '';
   const steal = state.view === 'steal' ? `<div class="row-actions">${state.teams.map((t,i)=> i===c.owner ? '' : `<button class="ghost" data-act="steal-team" data-i="${i}">${esc(t.name)} steals</button>`).join('')}<button class="ghost" data-act="continue">Nobody</button></div>` : '';
-  return `<div class="wrap stage">${header}<div class="clue"><div class="meta">${esc(q.cat)} · ${c.wager || c.value}${c.dd ? ' · Daily Double' : ''}</div><h2>${esc(q.q)}</h2></div>${state.view==='steal'?steal:`<div class="choices">${choices}</div>`}${foot}</div>`;
+  const clock = state.view === 'clue' ? clockBar() : '';
+  return `<div class="wrap stage">${header}${clock}<div class="clue"><div class="meta">${esc(q.cat)} · ${c.wager || c.value}${c.dd ? ' · Daily Double' : ''}</div><h2>${esc(q.q)}</h2></div>${state.view==='steal'?steal:`<div class="choices">${choices}</div>`}${foot}</div>`;
 }
 
 function finalHTML() {
@@ -519,7 +568,8 @@ function buzzerHTML() {
   const q = B.q;
   const choices = B.buzzed == null ? '' : `<div class="choices">${B.order.map((choice,i)=>`<button class="choice" data-act="buzz-answer" data-i="${i}" ${B.lock?'disabled':''}>${esc(choice)}</button>`).join('')}</div>`;
   const pads = `<div class="buzzers">${state.teams.map((t,i)=>`<button class="buzz" style="background:${t.color}" data-act="buzz" data-i="${i}" ${B.locked.has(i)||B.buzzed!=null?'disabled':''}>${esc(t.name)}<small>KEY ${BUZZ_KEYS[i]}</small></button>`).join('')}</div>`;
-  return `<div class="wrap stage"><div class="topbar">${brand()}<button class="ghost" data-act="end-mode">End round</button></div>${bugs()}<div class="clue"><div class="meta">${esc(q.cat)} · ${[100,200,300,400][q.d-1]} pts</div><h2>${esc(q.q)}</h2><p>${B.buzzed==null?'Slam in. First tap answers.':'Answering: '+esc(state.teams[B.buzzed].name)}</p></div>${B.buzzed==null?pads:choices}${B.note?`<p class="ref">${esc(B.note)}</p><button class="primary" data-act="buzz-next">Next clue</button>`:''}</div>`;
+  const clock = B.note ? '' : clockBar();
+  return `<div class="wrap stage"><div class="topbar">${brand()}<button class="ghost" data-act="end-mode">End round</button></div>${bugs()}${clock}<div class="clue"><div class="meta">${esc(q.cat)} · ${[100,200,300,400][q.d-1]} pts</div><h2>${esc(q.q)}</h2><p>${B.buzzed==null?'Slam in. First tap answers.':'Answering: '+esc(state.teams[B.buzzed].name)}</p></div>${B.buzzed==null?pads:choices}${B.note?`<p class="ref">${esc(B.note)}</p><button class="primary" data-act="buzz-next">Next clue</button>`:''}</div>`;
 }
 
 function winnerHTML() {
@@ -556,7 +606,7 @@ function act(name, btn) {
   if (name === 'open-steal') { state.view = 'steal'; render(); return; }
   if (name === 'steal-team') { beginSteal(Number(btn.dataset.i)); return; }
   if (name === 'continue') { afterClue(); return; }
-  if (name === 'abandon') { state.view = 'board'; render(); return; }
+  if (name === 'abandon') { clearTimer(); state.view = 'board'; render(); return; }
   if (name === 'reset-board') { buildBoard(); state.view = 'board'; render(); toast('New categories locked in.'); return; }
   if (name === 'call-final') { startFinal(); return; }
   if (name === 'final-wager') { saveFinalWager(); return; }
@@ -606,15 +656,16 @@ function openCell(id) {
   state.clue = { q: cell.q, value: cell.value, dd: cell.dd, order: shuffle(cell.q.choices), owner: state.turn, picked: null, correct: false, offerSteal: false, wager: cell.value, max };
   tone(440, .08);
   if (cell.dd) { state.view = 'wager'; render(); return; }
-  state.view = 'clue'; render();
+  state.view = 'clue'; render(); startClueTimer();
 }
 function lockWager() {
   const raw = Number(document.getElementById('wager').value || 0);
   state.clue.wager = Math.max(0, Math.min(state.clue.max, raw));
-  state.view = 'clue'; render();
+  state.view = 'clue'; render(); startClueTimer();
 }
 function judge(i) {
   if (state.lock || state.view !== 'clue') return;
+  clearTimer();
   state.lock = true;
   const c = state.clue;
   c.picked = c.order[i];
@@ -634,6 +685,7 @@ function beginSteal(i) {
   state.clue.order = shuffle(state.clue.q.choices);
   state.view = 'clue';
   render();
+  startClueTimer();
 }
 function afterClue() {
   if (!state.clue.correct) {
@@ -819,6 +871,7 @@ function nextBuzz() {
   state.buzzer = { q: dealt.q, order: dealt.order, buzzed: null, locked: new Set(), lock: false, note: '' };
   state.view = 'buzzer';
   render();
+  startClueTimer();
 }
 function buzz(i) {
   if (state.buzzer.buzzed != null || state.buzzer.locked.has(i)) return;
@@ -834,6 +887,7 @@ function buzzAnswer(i) {
   const right = B.order[i] === B.q.a;
   const pts = [100,200,300,400][B.q.d-1];
   if (right) {
+    clearTimer();
     state.teams[B.buzzed].score += pts;
     B.note = `Locked in. ${B.q.ref}`;
     fanfare();
@@ -843,7 +897,10 @@ function buzzAnswer(i) {
     B.buzzed = null;
     B.lock = false;
     miss();
-    if (B.locked.size >= state.teams.length) B.note = `Answer: ${B.q.a}. ${B.q.ref}`;
+    if (B.locked.size >= state.teams.length) {
+      clearTimer();
+      B.note = `Answer: ${B.q.a}. ${B.q.ref}`;
+    }
     render();
   }
 }
