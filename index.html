@@ -757,6 +757,7 @@ function nextStudy() {
   state.study.order = shuffle(q.choices.slice());
   state.study.left = 20;
   state.study.lock = false;
+  state.study.picked = null;
   state.study.note = '';
   state.view = 'study';
   render();
@@ -789,7 +790,8 @@ function studyAnswer(i) {
   clearTimer();
   S.lock = true;
   S.asked += 1;
-  const right = S.order[i] === S.q.a;
+  S.picked = S.order[i];
+  const right = S.picked === S.q.a;
   if (right) {
     S.correct += 1;
     state.teams[0].score += 100;
@@ -815,7 +817,7 @@ function studyHTML() {
     let cls = 'choice';
     if (S.lock) {
       if (choice === S.q.a) cls += ' good';
-      else if (S.note && S.note.startsWith('Answer') && choice !== S.q.a) cls += '';
+      else if (S.picked && choice === S.picked) cls += ' bad';
     }
     return `<button class="${cls}" data-act="study-answer" data-i="${i}" ${S.lock ? 'disabled' : ''}>${i+1}. ${esc(choice)}</button>`;
   }).join('');
